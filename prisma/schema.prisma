@@ -1,0 +1,460 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+// ── User & Authentication ──────────────────────────────────────────
+model User {
+  id            String       @id @default(cuid())
+  email         String       @unique
+  name          String
+  password      String
+  role          String       @default("user") // user, admin, contributor, viewer
+  avatar        String?
+  captchaVerified Boolean   @default(false)
+  createdAt     DateTime     @default(now())
+  updatedAt     DateTime     @updatedAt
+
+  company              Company?
+  ghgEntries           GhgEntry[]
+  esgResponses         EsgResponse[]
+  subscription         Subscription?
+  auditLogs            AuditLog[]
+  carbonTargets        CarbonTarget[]
+  userBadges           UserBadge[]
+  lessonCompletions    LessonCompletion[]
+  stepProgress         StepProgress[]
+  bills                Bill[]
+}
+
+// ── Company / Organisation Profile ─────────────────────────────────
+model Company {
+  id                  String   @id @default(cuid())
+  userId              String   @unique
+  companyName         String
+  companyNameBm       String?
+  registrationNumber  String?
+  registrationBody    String?  // SSM, MQA, MOH, MOTAC, etc.
+  yearEstablished     Int?
+  industrySector      String
+  industrySubSector   String?
+  annualRevenue       String?  // Revenue band: "<1M", "1M-5M", "5M-25M", etc.
+  numberOfEmployees   Int?
+  state               String?
+  district            String?
+  urbanRural          String?  // urban, rural, semi-urban
+  contactEmail        String?
+  contactPhone        String?
+  companySize         String   @default("Micro") // Micro, Small, Medium, Large
+  orgType             String   @default("sme")    // sme, cooperative, university, hotel, corporate, government, hospital, school
+  orgSubCategory      String?  // Hotel star rating, hospital beds, student enrolment, etc.
+  website             String?
+  logo                String?
+  facilityCount       Int      @default(1)
+  maturityLevel       String   @default("none") // none, ad_hoc, structured, certified
+  certificationStatus String?  // ISO 14001, MyHIJAU, GreenHotel, etc.
+  frameworkProfile    String?  // e.g. "SME-Basic", "Hotel-Intermediate", "University-Advanced"
+  onboardingCompleted Boolean  @default(false)
+  baseYear            String?  // e.g. "2025" for carbon baseline
+  createdAt           DateTime @default(now())
+  updatedAt           DateTime @updatedAt
+
+  user           User            @relation(fields: [userId], references: [id], onDelete: Cascade)
+  ghgEntries     GhgEntry[]
+  esgResponses   EsgResponse[]
+  carbonTargets  CarbonTarget[]
+  riskItems      RiskItem[]
+  materialityAssessments MaterialityAssessment[]
+  stepProgress   StepProgress[]
+  roadmapActions RoadmapAction[]
+  initiatives    Initiative[]
+  monitoringEntries MonitoringEntry[]
+  implementationLog ImplementationLog[]
+  bills             Bill[]
+
+  @@index([userId])
+  @@index([orgType])
+  @@index([industrySector])
+}
+
+// ── Step Progress (Phase/Step tracking) ────────────────────────────
+model StepProgress {
+  id          String   @id @default(cuid())
+  userId      String
+  companyId   String
+  phase       Int      // 1, 2, or 3
+  step        Int      // 1-8
+  status      String   @default("locked") // locked, in_progress, completed
+  startedAt   DateTime?
+  completedAt DateTime?
+  notes       String?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  user    User    @relation(fields: [userId], references: [id], onDelete: Cascade)
+  company Company @relation(fields: [companyId], references: [id], onDelete: Cascade)
+
+  @@unique([companyId, phase, step])
+  @@index([userId])
+  @@index([companyId])
+}
+
+// ── GHG Entry (reporting period container) ─────────────────────────
+model GhgEntry {
+  id              String   @id @default(cuid())
+  userId          String
+  companyId       String
+  reportingPeriod String   // e.g. "2025-06"
+  scope1Total     Float    @default(0) // tCO2e
+  scope2Total     Float    @default(0) // tCO2e
+  scope3Total     Float    @default(0) // tCO2e
+  totalEmissions  Float    @default(0) // tCO2e
+  status          String   @default("draft") // draft, submitted, verified
+  scope2Method    String   @default("location") // location, market, both
+  dataQualityScore Float   @default(100) // 0-100
+  notes           String?
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  user          User          @relation(fields: [userId], references: [id], onDelete: Cascade)
+  company       Company       @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  emissionItems EmissionItem[]
+
+  @@index([userId])
+  @@index([companyId])
+  @@index([reportingPeriod])
+}
+
+// ── Emission Item (works for all scopes & categories) ──────────────
+model EmissionItem {
+  id              String   @id @default(cuid())
+  ghgEntryId      String
+  scope           Int      // 1, 2, or 3
+  category        String   // e.g. "Stationary Combustion", "Purchased Goods"
+  subCategory     String?  // e.g. "Diesel", "Business Travel"
+  sourceName      String?
+  activityData    Float
+  activityUnit    String   // litres, kg, kWh, km, tonne, MYR
+  emissionFactor  Float
+  efUnit          String   // kg CO2e/unit
+  emissions       Float    // calculated tCO2e
+  month           Int?     // 1-12 for monthly breakdown
+  metadata        String?  // JSON: GWP, gas breakdown
+  dataSource      String?  // e.g. "TNB Bill", "Manual Entry", "OCR"
+  dataQualityFlag String   @default("verified") // verified, estimated, calculated
+
+  ghgEntry  GhgEntry  @relation(fields: [ghgEntryId], references: [id], onDelete: Cascade)
+
+  @@index([ghgEntryId])
+  @@index([scope])
+  @@index([category])
+}
+
+// ── ESG Questionnaire Response ─────────────────────────────────────
+model EsgResponse {
+  id                 String   @id @default(cuid())
+  userId             String
+  companyId          String
+  reportingPeriod    String?
+  section            String   // Governance, Environmental, Social
+  indicatorCode      String   // e.g. G1, E1, S1
+  indicatorLabel     String
+  responseValue      String?
+  notes              String?
+  dataQualityFlag    String   @default("verified") // verified, estimated, self-reported
+  createdAt          DateTime @default(now())
+  updatedAt          DateTime @updatedAt
+
+  user    User    @relation(fields: [userId], references: [id], onDelete: Cascade)
+  company Company @relation(fields: [companyId], references: [id], onDelete: Cascade)
+
+  @@unique([companyId, indicatorCode])
+  @@index([userId])
+  @@index([companyId])
+}
+
+// ── Carbon Target & Reduction Planning ─────────────────────────────
+model CarbonTarget {
+  id               String    @id @default(cuid())
+  userId           String
+  companyId        String
+  targetName       String
+  targetType       String    // absolute, intensity, net_zero
+  intensityMetric  String?   // per_revenue, per_employee, per_room_night, per_student
+  baseYear         String
+  baseEmissions    Float     // tCO2e baseline
+  targetYear       String
+  targetReduction  Float     // percentage (e.g. 30.0 for 30%)
+  targetEmissions  Float     // calculated target tCO2e
+  currentEmissions Float?    // latest actual
+  progress         Float?    // percentage towards target (0-100, >100 = exceeded)
+  status           String    @default("on_track") // on_track, at_risk, off_track, achieved
+  sbtiAligned      Boolean   @default(false)
+  netrAligned      Boolean   @default(false)
+  notes            String?
+  createdAt        DateTime  @default(now())
+  updatedAt        DateTime  @updatedAt
+
+  user    User    @relation(fields: [userId], references: [id], onDelete: Cascade)
+  company Company @relation(fields: [companyId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@index([companyId])
+}
+
+// ── Materiality Assessment ─────────────────────────────────────────
+model MaterialityAssessment {
+  id                String   @id @default(cuid())
+  userId            String
+  companyId         String
+  esgTopic          String   // e.g. "Climate Change", "Water Management"
+  category          String   // Environmental, Social, Governance
+  impactRating      Int      // 1-5 (impact materiality)
+  financialRating   Int      // 1-5 (financial materiality)
+  combinedScore     Float    // average or weighted
+  isMaterial        Boolean  @default(false)
+  stakeholderInput  String?  // JSON: aggregated stakeholder ratings
+  notes             String?
+  assessedAt        DateTime @default(now())
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
+
+  company Company @relation(fields: [companyId], references: [id], onDelete: Cascade)
+
+  @@unique([companyId, esgTopic])
+  @@index([companyId])
+  @@index([isMaterial])
+}
+
+// ── Risk Register (Climate & ESG) ──────────────────────────────────
+model RiskItem {
+  id              String   @id @default(cuid())
+  userId          String
+  companyId       String
+  riskName        String
+  riskType        String   // physical_climate, transition_climate, governance, social, environmental
+  riskCategory    String?  // e.g. "Flooding", "Carbon Pricing"
+  likelihood      Int      // 1-5
+  impact          Int      // 1-5
+  riskScore       Float    // likelihood * impact
+  riskOwner       String?
+  mitigationAction String?
+  residualLikelihood Int?  // after mitigation
+  residualImpact     Int?  // after mitigation
+  status          String   @default("open") // open, mitigating, closed
+  reviewDate      String?
+  notes           String?
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  company Company @relation(fields: [companyId], references: [id], onDelete: Cascade)
+
+  @@index([companyId])
+  @@index([riskType])
+  @@index([status])
+}
+
+// ── Roadmap Action (Step 4) ────────────────────────────────────────
+model RoadmapAction {
+  id              String   @id @default(cuid())
+  userId          String
+  companyId       String
+  actionName      String
+  actionType      String   @default("quick_win") // quick_win, strategic, regulatory
+  category        String   // energy, waste, water, transport, social, governance
+  targetMetric    String?  // e.g. "Reduce 20% kWh"
+  timeline        String   // Q1 2026, 2026, Long-term
+  timeHorizon     String   @default("short") // short (1-2yr), medium (3-5yr), long (2030+)
+  owner           String?
+  estimatedCost   Float?   // MYR
+  financingSource String?  // GITA, GTFS, Internal, etc.
+  expectedBenefit String?
+  carbonReduction Float?   // estimated tCO2e reduction per year
+  status          String   @default("planned") // planned, in_progress, completed, on_hold
+  sortOrder       Int      @default(0)
+  notes           String?
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  company Company @relation(fields: [companyId], references: [id], onDelete: Cascade)
+
+  @@index([companyId])
+  @@index([status])
+}
+
+// ── Initiative Brief (Step 5) ─────────────────────────────────────
+model Initiative {
+  id              String   @id @default(cuid())
+  userId          String
+  companyId       String
+  initiativeName  String
+  description     String
+  scope           String?  // Description of the action
+  estimatedCost   Float?
+  costType        String?  // capital, operational
+  expectedSavings String?  // Energy cost reduction description
+  paybackPeriod   String?  // e.g. "1.2 years", "3 years"
+  roi             String?
+  financingMechanism String? // GITA, GTFS, GITE, Internal, Green Loan
+  eligibilityNote String?
+  actionId        String?  // Link to RoadmapAction
+  status          String   @default("identified") // identified, approved, in_progress, completed
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  company Company @relation(fields: [companyId], references: [id], onDelete: Cascade)
+
+  @@index([companyId])
+  @@index([status])
+}
+
+// ── Monitoring Entry (Step 6) ─────────────────────────────────────
+model MonitoringEntry {
+  id              String   @id @default(cuid())
+  userId          String
+  companyId       String
+  reportingMonth  String   // e.g. "2025-06"
+  energyKwh       Float    @default(0)
+  energyCostMyr   Float?
+  waterM3         Float    @default(0)
+  waterCostMyr    Float?
+  wasteKg         Float    @default(0)
+  wasteCostMyr    Float?
+  ghgEmissions    Float    @default(0) // tCO2e
+  notes           String?
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  company Company @relation(fields: [companyId], references: [id], onDelete: Cascade)
+
+  @@unique([companyId, reportingMonth])
+  @@index([companyId])
+  @@index([reportingMonth])
+}
+
+// ── Implementation Log (Step 6) ───────────────────────────────────
+model ImplementationLog {
+  id              String   @id @default(cuid())
+  userId          String
+  companyId       String
+  actionTaken     String
+  actionDate      String
+  resultsAchieved String?
+  lessonsLearned  String?
+  relatedActionId String?
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  company Company @relation(fields: [companyId], references: [id], onDelete: Cascade)
+
+  @@index([companyId])
+  @@index([actionDate])
+}
+
+// ── Audit Log (Data Lineage) ───────────────────────────────────────
+model AuditLog {
+  id            String   @id @default(cuid())
+  userId        String
+  companyId     String?
+  ghgEntryId    String?
+  entityType    String   // GhgEntry, EmissionItem, EsgResponse, Company, CarbonTarget, etc.
+  entityId      String?
+  action        String   // create, update, delete, submit, verify
+  fieldName     String?
+  oldValue      String?
+  newValue      String?
+  reason        String?
+  ipAddress     String?
+  createdAt     DateTime @default(now())
+
+  user     User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@index([companyId])
+  @@index([entityType])
+  @@index([createdAt])
+}
+
+// ── Subscription ───────────────────────────────────────────────────
+model Subscription {
+  id        String    @id @default(cuid())
+  userId    String    @unique
+  plan      String    @default("free")
+  status    String    @default("active")
+  startDate DateTime  @default(now())
+  endDate   DateTime?
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+}
+
+// ── Gamification: User Badges ──────────────────────────────────────
+model UserBadge {
+  id          String   @id @default(cuid())
+  userId      String
+  badgeKey    String   // e.g. "first_ghg", "sedg_basic", "solar_champion", "phase1_complete"
+  badgeName   String
+  badgeDesc   String?
+  earnedAt    DateTime @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, badgeKey])
+  @@index([userId])
+}
+
+// ── Education: Lesson Completion ───────────────────────────────────
+model LessonCompletion {
+  id          String   @id @default(cuid())
+  userId      String
+  moduleId    String
+  lessonId    String
+  completedAt DateTime @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, lessonId])
+  @@index([userId])
+}
+
+// ── Bill (Utility Bill with CO2e Calculation) ──────────────────────
+model Bill {
+  id                String   @id @default(cuid())
+  userId            String
+  companyId         String
+  billType          String   // electricity, water, fuel, waste
+  provider          String
+  providerCode      String?  // TNB, SESB, SESCO, Air Selangor, etc.
+  consumptionValue  Float
+  consumptionUnit   String   // kWh, m3, litres, kg
+  billAmount        Float?
+  billDate          String   // YYYY-MM-DD
+  billPeriodStart   String?
+  billPeriodEnd     String?
+  emissionFactor    Float
+  emissionFactorUnit String? // kgCO2e/kWh, kgCO2e/m3, etc.
+  co2eKg            Float    // calculated kg CO2e
+  scope             String   @default("scope2") // scope1, scope2, scope3
+  fileName          String?
+  isVerified        Boolean  @default(false)
+  dataSource        String   @default("manual") // manual, ocr, api
+  notes             String?
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
+
+  user    User    @relation(fields: [userId], references: [id], onDelete: Cascade)
+  company Company @relation(fields: [companyId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@index([companyId])
+  @@index([billType])
+  @@index([billDate])
+  @@index([scope])
+}
